@@ -21,6 +21,18 @@ Based on the Delta ERV specification document, this integration supports:
 
 ## Installation
 
+### Hardware
+The delta ERV's stock control panel consists of an AC (220V) to DC (5V) transformer, and a screen module with built-in control board. Since we want to control the ERV ourselves, the control board is no longer needed. We can purchase any off-the-self RS485 to wifi converter which can be powered by 5V DC. For example, this [EP-W100 RS485 to Wifi converter](https://e.tb.cn/h.79rbgwYYMP1WPCZ?tk=7FMdUWSXanM) by 华允物联. Connect the pinout from the stock transformer's GND, 5VDC, RS485 A/B pins to the RS845 to wifi converter as shown in the image below.
+
+<p align="center">
+  <img src=".img/installation.jpg" width="300px" />
+  <img src=".img/installation2.jpg" width="300px" />
+</p>
+
+I've also designed a 3D printable case which matches the original panel design, which can be used to hide the RS485 to wifi converter. You can download the design from this [Makerworld page](https://makerworld.com/en/models/2381915-delta-erv-control-panel-vfru-ervt-03ss-cover)
+
+### Software
+
 1. Copy the `custom_components/delta_erv` directory to your Home Assistant `custom_components` directory.
 2. Restart Home Assistant.
 3. Add the integration through the Home Assistant UI (Configuration > Integrations > Add Integration).
