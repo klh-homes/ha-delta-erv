@@ -1,7 +1,6 @@
 """Sensor platform for Delta ERV integration."""
 
 import logging
-from datetime import timedelta
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -12,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
@@ -27,11 +27,9 @@ from .const import (
     STATUS_OUTDOOR_TEMP_ERROR,
     STATUS_SUPPLY_FAN_ERROR,
 )
+from .coordinator import DeltaERVDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-# Polling interval
-SCAN_INTERVAL = timedelta(seconds=5)
 
 
 async def async_setup_entry(
@@ -41,76 +39,60 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Delta ERV sensor platform."""
     data = hass.data[DOMAIN][config_entry.entry_id]
-    config = data["config"]
-    client = data["client"]
-
-    name = config[CONF_NAME]
+    coordinator = data["coordinator"]
+    name = data["config"][CONF_NAME]
 
     sensors = [
         DeltaERVTemperatureSensor(
-            hass,
+            coordinator,
             name,
-            client,
             "outdoor_temp",
             "Outdoor Temperature",
             REG_OUTDOOR_TEMP,
         ),
         DeltaERVTemperatureSensor(
-            hass,
+            coordinator,
             name,
-            client,
             "indoor_temp",
             "Indoor Return Temperature",
             REG_INDOOR_RETURN_TEMP,
         ),
         DeltaERVSpeedSensor(
-            hass,
+            coordinator,
             name,
-            client,
             "supply_fan_speed",
             "Supply Fan Speed",
             REG_SUPPLY_FAN_SPEED,
         ),
         DeltaERVSpeedSensor(
-            hass,
+            coordinator,
             name,
-            client,
             "exhaust_fan_speed",
             "Exhaust Fan Speed",
             REG_EXHAUST_FAN_SPEED,
         ),
-        DeltaERVStatusSensor(
-            hass,
-            name,
-            client,
-            "abnormal_status",
-            "Abnormal Status",
-            REG_ABNORMAL_STATUS,
-        ),
-        DeltaERVStatusSensor(
-            hass,
-            name,
-            client,
-            "system_status",
-            "System Status",
-            REG_SYSTEM_STATUS,
-        ),
+        DeltaERVAbnormalStatusSensor(coordinator, name),
+        DeltaERVSystemStatusSensor(coordinator, name),
     ]
+    async_add_entities(sensors)
 
-    async_add_entities(sensors, True)
 
-
-class DeltaERVBaseSensor(SensorEntity):
+class DeltaERVBaseSensor(
+    CoordinatorEntity[DeltaERVDataCoordinator], SensorEntity
+):
     """Base class for Delta ERV sensors."""
 
     _attr_has_entity_name = True
 
     def __init__(
-        self, hass, device_name, client, sensor_id, sensor_name, register
-    ):
-        """Initialize the sensor."""
-        self.hass = hass
-        self._client = client
+        self,
+        coordinator: DeltaERVDataCoordinator,
+        device_name: str,
+        sensor_id: str,
+        sensor_name: str,
+        register: int,
+    ) -> None:
+        super().__init__(coordinator)
         self._register = register
         self._attr_unique_id = f"{device_name}_{sensor_id}"
         self._attr_name = sensor_name
@@ -121,6 +103,13 @@ class DeltaERVBaseSensor(SensorEntity):
             "model": "ERV",
         }
 
+    @property
+    def available(self) -> bool:
+        """Available whenever the coordinator has a value for our register."""
+        return super().available and self._register in (
+            self.coordinator.data or {}
+        )
+
 
 class DeltaERVTemperatureSensor(DeltaERVBaseSensor):
     """Temperature sensor for Delta ERV."""
@@ -129,120 +118,110 @@ class DeltaERVTemperatureSensor(DeltaERVBaseSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
-    async def async_update(self) -> None:
-        """Update the sensor state."""
-        result = await self._client.async_read_register(self._register)
-
-        if result:
-            # Temperature is stored as signed 16-bit integer in °C
-            raw_value = result.registers[0]
-
-            # Convert from unsigned to signed if necessary
-            if raw_value > 32767:
-                temperature = raw_value - 65536
-            else:
-                temperature = raw_value
-
-            self._attr_native_value = float(temperature)
-            self._attr_available = True
-        else:
-            _LOGGER.debug(
-                "Failed to read temperature from register 0x%04X (may not be available on this model)",
-                self._register,
-            )
-            self._attr_available = False
-            self._attr_native_value = None
+    @property
+    def native_value(self) -> float | None:
+        raw = (self.coordinator.data or {}).get(self._register)
+        if raw is None:
+            return None
+        # Delta ERV returns a signed 16-bit integer in °C.
+        return float(raw - 65536 if raw > 32767 else raw)
 
 
 class DeltaERVSpeedSensor(DeltaERVBaseSensor):
-    """Fan speed sensor for Delta ERV."""
+    """Fan speed (RPM) sensor for Delta ERV."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "rpm"
     _attr_icon = "mdi:fan"
 
-    async def async_update(self) -> None:
-        """Update the sensor state."""
-        result = await self._client.async_read_register(self._register)
-
-        if result:
-            # Fan speed is in RPM
-            self._attr_native_value = result.registers[0]
-            self._attr_available = True
-        else:
-            _LOGGER.debug(
-                "Failed to read fan speed from register 0x%04X (may not be available on this model)",
-                self._register,
-            )
-            self._attr_available = False
-            self._attr_native_value = None
+    @property
+    def native_value(self) -> int | None:
+        return (self.coordinator.data or {}).get(self._register)
 
 
-class DeltaERVStatusSensor(DeltaERVBaseSensor):
-    """Status sensor for Delta ERV."""
+class DeltaERVAbnormalStatusSensor(DeltaERVBaseSensor):
+    """Abnormal status sensor — decodes error bit flags (register 0x10)."""
 
     _attr_icon = "mdi:information"
 
-    async def async_update(self) -> None:
-        """Update the sensor state."""
-        result = await self._client.async_read_register(self._register)
-        if result:
-            status_value = result.registers[0]
+    def __init__(
+        self, coordinator: DeltaERVDataCoordinator, device_name: str
+    ) -> None:
+        super().__init__(
+            coordinator,
+            device_name,
+            "abnormal_status",
+            "Abnormal Status",
+            REG_ABNORMAL_STATUS,
+        )
 
-            if self._register == REG_ABNORMAL_STATUS:
-                # Parse abnormal status bits
-                has_error = bool(
-                    status_value
-                    & (
-                        STATUS_EEPROM_ERROR
-                        | STATUS_INDOOR_TEMP_ERROR
-                        | STATUS_OUTDOOR_TEMP_ERROR
-                        | STATUS_EXHAUST_FAN_ERROR
-                        | STATUS_SUPPLY_FAN_ERROR
-                    )
-                )
+    def _status(self) -> int | None:
+        return (self.coordinator.data or {}).get(REG_ABNORMAL_STATUS)
 
-                self._attr_native_value = "Error" if has_error else "Normal"
-                self._attr_extra_state_attributes = {
-                    "eeprom_error": bool(status_value & STATUS_EEPROM_ERROR),
-                    "indoor_temp_error": bool(
-                        status_value & STATUS_INDOOR_TEMP_ERROR
-                    ),
-                    "outdoor_temp_error": bool(
-                        status_value & STATUS_OUTDOOR_TEMP_ERROR
-                    ),
-                    "exhaust_fan_error": bool(
-                        status_value & STATUS_EXHAUST_FAN_ERROR
-                    ),
-                    "supply_fan_error": bool(
-                        status_value & STATUS_SUPPLY_FAN_ERROR
-                    ),
-                    "raw_value": f"0x{status_value:04X}",
-                }
+    @property
+    def native_value(self) -> str | None:
+        status = self._status()
+        if status is None:
+            return None
+        any_error = status & (
+            STATUS_EEPROM_ERROR
+            | STATUS_INDOOR_TEMP_ERROR
+            | STATUS_OUTDOOR_TEMP_ERROR
+            | STATUS_EXHAUST_FAN_ERROR
+            | STATUS_SUPPLY_FAN_ERROR
+        )
+        return "Error" if any_error else "Normal"
 
-            elif self._register == REG_SYSTEM_STATUS:
-                # Parse system status (register 0x13)
-                # Main status shows if running
-                is_running = bool(status_value & 0x0001)
-                self._attr_native_value = "Running" if is_running else "Stopped"
+    @property
+    def extra_state_attributes(self) -> dict:
+        status = self._status()
+        if status is None:
+            return {}
+        return {
+            "eeprom_error": bool(status & STATUS_EEPROM_ERROR),
+            "indoor_temp_error": bool(status & STATUS_INDOOR_TEMP_ERROR),
+            "outdoor_temp_error": bool(status & STATUS_OUTDOOR_TEMP_ERROR),
+            "exhaust_fan_error": bool(status & STATUS_EXHAUST_FAN_ERROR),
+            "supply_fan_error": bool(status & STATUS_SUPPLY_FAN_ERROR),
+            "raw_value": f"0x{status:04X}",
+        }
 
-                self._attr_extra_state_attributes = {
-                    "running": is_running,
-                    "bypass_active": bool(status_value & 0x0010),
-                    "internal_circulation": bool(status_value & 0x0020),
-                    "low_temp_protection": bool(status_value & 0x0040),
-                    "raw_value": f"0x{status_value:04X}",
-                }
-            else:
-                # For other status registers, show raw hex value
-                self._attr_native_value = f"0x{status_value:04X}"
-                self._attr_extra_state_attributes = {}
 
-            self._attr_available = True
-        else:
-            _LOGGER.debug(
-                "Failed to read status from register 0x%04X (may not be available on this model)",
-                self._register,
-            )
-            self._attr_available = False
-            self._attr_native_value = None
+class DeltaERVSystemStatusSensor(DeltaERVBaseSensor):
+    """System status sensor (register 0x13) — running / bypass / etc."""
+
+    _attr_icon = "mdi:information"
+
+    def __init__(
+        self, coordinator: DeltaERVDataCoordinator, device_name: str
+    ) -> None:
+        super().__init__(
+            coordinator,
+            device_name,
+            "system_status",
+            "System Status",
+            REG_SYSTEM_STATUS,
+        )
+
+    def _status(self) -> int | None:
+        return (self.coordinator.data or {}).get(REG_SYSTEM_STATUS)
+
+    @property
+    def native_value(self) -> str | None:
+        status = self._status()
+        if status is None:
+            return None
+        return "Running" if (status & 0x0001) else "Stopped"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        status = self._status()
+        if status is None:
+            return {}
+        return {
+            "running": bool(status & 0x0001),
+            "bypass_active": bool(status & 0x0010),
+            "internal_circulation": bool(status & 0x0020),
+            "low_temp_protection": bool(status & 0x0040),
+            "raw_value": f"0x{status:04X}",
+        }

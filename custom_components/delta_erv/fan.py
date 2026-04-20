@@ -1,7 +1,6 @@
 """Fan platform for Delta ERV integration."""
 
 import logging
-from datetime import timedelta
 from typing import Any, Optional
 
 from homeassistant.components.fan import FanEntity, FanEntityFeature
@@ -9,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
@@ -24,52 +24,33 @@ from .const import (
     SUPPLY_MAX_REGISTER_PCT,
     SUPPLY_MIN_REGISTER_PCT,
 )
+from .coordinator import DeltaERVDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Polling interval
-SCAN_INTERVAL = timedelta(seconds=5)
-
-# We use only Custom 1 (0x01) and dynamically set the percentage
-# This gives us full 0-100% granular control
-
 
 def calculate_fan_percentages(user_percentage: int) -> tuple[int, int]:
-    """Calculate supply and exhaust percentages to maintain positive pressure.
-
-    Strategy:
-    Map user's 0-100% to each fan's register range:
-    - Exhaust: 0% → 0, 1-100% → 1-48% register
-    - Supply: 0% → 0, 1-100% → 1-62% register
+    """Map user's 0-100% to (supply_pct, exhaust_pct) register values.
 
     The device has non-linear register mapping:
     - 0% register = fan off
-    - 1% register = min RPM (400/380)
-    - 48%/62% register = max RPM (1840/2300)
+    - 1% register = min RPM (400 / 380)
+    - 48% / 62% register = max RPM (1840 / 2300)
 
-    Args:
-        user_percentage: User's desired fan speed (0-100%)
-
-    Returns:
-        Tuple of (supply_pct, exhaust_pct)
+    User 0-100% is quantized to 10% steps for consistency with speed_count.
     """
     if user_percentage == 0:
         return 0, 0
 
-    # Quantize to 10% steps (0, 10, 20, ..., 100) for consistency with speed_count
     quantized_pct = round(user_percentage / 10) * 10
-    quantized_pct = max(0, min(100, quantized_pct))  # Ensure 0-100 range
+    quantized_pct = max(0, min(100, quantized_pct))
 
-    # Map quantized percentage to register ranges
-    # Exhaust: 10-100% user → 1-48% register
     exhaust_pct = int(
         EXHAUST_MIN_REGISTER_PCT
         + (quantized_pct - 10)
         / 90.0
         * (EXHAUST_MAX_REGISTER_PCT - EXHAUST_MIN_REGISTER_PCT)
     )
-
-    # Supply: 10-100% user → 1-63% register
     supply_pct = int(
         SUPPLY_MIN_REGISTER_PCT
         + (quantized_pct - 10)
@@ -77,7 +58,6 @@ def calculate_fan_percentages(user_percentage: int) -> tuple[int, int]:
         * (SUPPLY_MAX_REGISTER_PCT - SUPPLY_MIN_REGISTER_PCT)
     )
 
-    # Clamp to valid ranges
     exhaust_pct = max(
         EXHAUST_MIN_REGISTER_PCT, min(EXHAUST_MAX_REGISTER_PCT, exhaust_pct)
     )
@@ -94,29 +74,16 @@ def calculate_fan_percentages(user_percentage: int) -> tuple[int, int]:
 
 
 def calculate_user_percentage(supply_pct: int, exhaust_pct: int) -> int:
-    """Reverse calculation: convert fan percentages back to user percentage.
-
-    We use exhaust register value as reference to reverse the mapping.
-
-    Args:
-        supply_pct: Supply fan percentage from register (unused)
-        exhaust_pct: Exhaust fan percentage from register
-
-    Returns:
-        User-facing percentage (0-100), quantized to 10% steps
-    """
+    """Reverse the mapping from the exhaust register to user percentage."""
     if exhaust_pct == 0:
         return 0
 
-    # Reverse map: exhaust register 1-48% → user 10-100%
     user_pct = int(
         10
         + (exhaust_pct - EXHAUST_MIN_REGISTER_PCT)
         / (EXHAUST_MAX_REGISTER_PCT - EXHAUST_MIN_REGISTER_PCT)
         * 90
     )
-
-    # Quantize to 10% steps
     quantized = round(user_pct / 10) * 10
     return max(0, min(100, quantized))
 
@@ -128,18 +95,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Delta ERV fan platform."""
     data = hass.data[DOMAIN][config_entry.entry_id]
-    config = data["config"]
-    client = data["client"]
+    coordinator = data["coordinator"]
+    name = data["config"][CONF_NAME]
 
-    name = config[CONF_NAME]
-
-    async_add_entities(
-        [DeltaERVFan(hass, name, client)],
-        True,
-    )
+    async_add_entities([DeltaERVFan(coordinator, name)])
 
 
-class DeltaERVFan(FanEntity):
+class DeltaERVFan(CoordinatorEntity[DeltaERVDataCoordinator], FanEntity):
     """Representation of a Delta ERV fan device."""
 
     _attr_has_entity_name = True
@@ -149,14 +111,10 @@ class DeltaERVFan(FanEntity):
         | FanEntityFeature.TURN_ON
         | FanEntityFeature.TURN_OFF
     )
-    _attr_speed_count = (
-        10  # 10 speed levels for better HomeKit compatibility (10% increments)
-    )
+    _attr_speed_count = 10  # 10% steps
 
-    def __init__(self, hass, name, client):
-        """Initialize the fan device."""
-        self.hass = hass
-        self._client = client
+    def __init__(self, coordinator: DeltaERVDataCoordinator, name: str) -> None:
+        super().__init__(coordinator)
         self._attr_unique_id = f"{name}_fan"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._attr_unique_id)},
@@ -165,48 +123,27 @@ class DeltaERVFan(FanEntity):
             "model": "ERV",
         }
 
-        # Initialize state variables
-        self._attr_is_on = False
-        self._attr_percentage = None
+    @property
+    def _client(self):
+        """Modbus client used for writes — reads go through the coordinator."""
+        return self.coordinator.client
+
+    @property
+    def is_on(self) -> bool:
+        data = self.coordinator.data or {}
+        return data.get(REG_POWER) == POWER_ON
 
     @property
     def percentage(self) -> Optional[int]:
-        """Return the current speed percentage."""
-        return self._attr_percentage
+        data = self.coordinator.data or {}
+        if data.get(REG_POWER) != POWER_ON:
+            return 0
 
-    async def async_update(self) -> None:
-        """Update the state of the fan device."""
-        # Get power status
-        power_result = await self._client.async_read_register(REG_POWER)
-        if power_result:
-            power_status = power_result.registers[0]
-            self._attr_is_on = power_status == POWER_ON
-        else:
-            _LOGGER.error("Failed to read power status")
-            return
-
-        # Read current percentages from both fans
-        if self._attr_is_on:
-            supply_pct_result = await self._client.async_read_register(
-                REG_SUPPLY_AIR_1_PCT
-            )
-            exhaust_pct_result = await self._client.async_read_register(
-                REG_EXHAUST_AIR_1_PCT
-            )
-
-            if supply_pct_result and exhaust_pct_result:
-                supply_pct = supply_pct_result.registers[0]
-                exhaust_pct = exhaust_pct_result.registers[0]
-                # Convert back to user-facing percentage
-                self._attr_percentage = calculate_user_percentage(
-                    supply_pct, exhaust_pct
-                )
-            else:
-                # Fallback to default if read fails
-                if self._attr_percentage is None:
-                    self._attr_percentage = 60
-        else:
-            self._attr_percentage = 0
+        supply_pct = data.get(REG_SUPPLY_AIR_1_PCT)
+        exhaust_pct = data.get(REG_EXHAUST_AIR_1_PCT)
+        if supply_pct is None or exhaust_pct is None:
+            return None
+        return calculate_user_percentage(supply_pct, exhaust_pct)
 
     async def async_set_percentage(self, percentage: int) -> None:
         """Set the speed of the fan, as a percentage."""
@@ -214,37 +151,30 @@ class DeltaERVFan(FanEntity):
             await self.async_turn_off()
             return
 
-        # Ensure percentage is within valid range
         percentage = max(0, min(100, percentage))
-
-        # Calculate appropriate supply and exhaust percentages for positive pressure
         supply_pct, exhaust_pct = calculate_fan_percentages(percentage)
 
-        # Write calculated percentages to supply and exhaust registers (0x07 and 0x0A)
-        success_supply = await self._client.async_write_register(
+        ok_supply = await self._client.async_write_register(
             REG_SUPPLY_AIR_1_PCT, supply_pct
         )
-        success_exhaust = await self._client.async_write_register(
+        ok_exhaust = await self._client.async_write_register(
             REG_EXHAUST_AIR_1_PCT, exhaust_pct
         )
 
-        if success_supply and success_exhaust:
-            # Set fan speed to Custom 1 (0x01)
-            success_speed = await self._client.async_write_register(
+        if ok_supply and ok_exhaust:
+            ok_speed = await self._client.async_write_register(
                 REG_FAN_SPEED, FAN_SPEED_CUSTOM_1
             )
-
-            if success_speed:
-                self._attr_percentage = percentage
+            if ok_speed:
                 _LOGGER.debug(f"Set fan speed to {percentage}%")
-
-                # If fan was off, turn it on
-                if not self._attr_is_on:
-                    await self.async_turn_on(percentage=percentage)
+                if not self.is_on:
+                    await self._client.async_write_register(REG_POWER, POWER_ON)
             else:
                 _LOGGER.error("Failed to set fan speed register to Custom 1")
         else:
             _LOGGER.error(f"Failed to set fan percentage to {percentage}%")
+
+        await self.coordinator.async_request_refresh()
 
     async def async_turn_on(
         self,
@@ -252,28 +182,23 @@ class DeltaERVFan(FanEntity):
         preset_mode: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        """Turn the fan on."""
-        # If percentage is specified, set it first
+        """Turn the fan on, restoring a previous speed if known."""
         if percentage is not None:
             await self.async_set_percentage(percentage)
-        elif self._attr_percentage is None or self._attr_percentage == 0:
-            # Default to 30% (low speed) if no previous speed
-            await self.async_set_percentage(30)
+            return
 
-        # Set power on
-        success = await self._client.async_write_register(REG_POWER, POWER_ON)
+        current_pct = self.percentage
+        if current_pct is None or current_pct == 0:
+            await self.async_set_percentage(30)  # default low speed
+            return
 
-        if success:
-            self._attr_is_on = True
-        else:
+        # Already on at a known speed, just make sure power is on.
+        if not await self._client.async_write_register(REG_POWER, POWER_ON):
             _LOGGER.error("Failed to turn on ERV fan")
+        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the fan off."""
-        success = await self._client.async_write_register(REG_POWER, POWER_OFF)
-
-        if success:
-            self._attr_is_on = False
-            self._attr_percentage = 0
-        else:
+        if not await self._client.async_write_register(REG_POWER, POWER_OFF):
             _LOGGER.error("Failed to turn off ERV fan")
+        await self.coordinator.async_request_refresh()
