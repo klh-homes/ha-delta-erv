@@ -2,6 +2,8 @@
 
 This is a custom component for Home Assistant that integrates Delta ERV (Energy Recovery Ventilation) devices via Modbus (serial or TCP). You need to connect a RS485 to Ethernet/Wi-Fi converter to the RS485 port of the Delta ERV system.
 
+> **Fork notice.** This repository is a maintenance fork of [aitjcize/ha-delta-erv](https://github.com/aitjcize/ha-delta-erv). See [Changes from upstream](#changes-from-upstream) for what differs.
+
 ## Features
 
 - Control ERV fan speed (Low/Medium/High)
@@ -10,6 +12,17 @@ This is a custom component for Home Assistant that integrates Delta ERV (Energy 
 - Monitor supply and exhaust fan speeds
 - Monitor system status and error conditions
 - Support for both serial RS485 and TCP connections
+
+## Changes from upstream
+
+This fork diverges from [aitjcize/ha-delta-erv](https://github.com/aitjcize/ha-delta-erv) in the following ways. Changes may or may not eventually be contributed back upstream.
+
+- **Non-blocking Modbus connect.** `DeltaERVModbusClient._ensure_connection` used to call `pymodbus`'s blocking `client.connect()` synchronously on the event loop. When the ERV bridge fell off the network, every polling cycle froze Home Assistant for the full TCP timeout (~3 s) and cascaded into MQTT / Supervisor / addon timeouts across the whole instance. The client now dispatches the connect via `hass.async_add_executor_job` and the TCP timeout is lowered from 3 s to 1 s.
+- **Single DataUpdateCoordinator.** The 9 entities previously each ran their own 5-second polling loop. A new `DeltaERVDataCoordinator` polls the full register set once per cycle and fans the snapshot out to `CoordinatorEntity` subclasses, so entities also share availability / `UpdateFailed` handling for free. The coordinator tolerates missing optional registers so models like VEB500+ that lack the temperature sensors still work correctly.
+- **Pytest test suite.** `tests/` contains a 19-test pytest + pytest-asyncio suite that runs against a live mock Modbus server (`mock-server/`) and covers the modbus client, coordinator, and entity state derivation. Includes a regression test that specifically catches the event-loop-freeze bug above. Runs via `make test`.
+- **Mock Modbus server.** `mock-server/` simulates a Delta ERV well enough for local iteration and CI: 12 registers with sensible defaults, an optional simulation thread that derives measured fan RPM from the commanded percentages, and a `simulate=False` mode for deterministic tests.
+- **HACS metadata.** `hacs.json` declares a minimum HA version and enables README rendering. `manifest.json` drops the unused `dependencies: ["modbus"]` declaration, bumps `pymodbus` floor to `>=3.11.2`, and points `codeowners` / `documentation` / `issue_tracker` at this fork.
+- **CI on Python 3.14.** GitHub Actions workflow runs on Python 3.14 to match the HA 2026.3+ runtime (HA 2026.3.x requires `Python >= 3.14.2`).
 
 ## Supported Models
 
@@ -33,9 +46,18 @@ I've also designed a 3D printable case which matches the original panel design, 
 
 ### Software
 
-1. Copy the `custom_components/delta_erv` directory to your Home Assistant `custom_components` directory.
+#### HACS (recommended)
+
+1. In HACS, open the three-dot menu → *Custom repositories*, paste this repo URL, set category to *Integration*, and add it.
+2. Install "Delta ERV" from HACS.
+3. Restart Home Assistant.
+4. *Settings → Devices & Services → Add Integration → Delta ERV*.
+
+#### Manual
+
+1. Copy the `custom_components/delta_erv` directory to your Home Assistant `/config/custom_components/` directory.
 2. Restart Home Assistant.
-3. Add the integration through the Home Assistant UI (Configuration > Integrations > Add Integration).
+3. *Settings → Devices & Services → Add Integration → Delta ERV*.
 
 ## Configuration
 
@@ -113,6 +135,32 @@ logger:
 ```
 
 ## Development
+
+Requires Python 3.14 (matching the Home Assistant runtime version this integration targets). Create a virtual environment and install dev dependencies:
+
+```bash
+make setup-venv
+source .venv/bin/activate
+```
+
+Makefile targets:
+
+```bash
+# Run linters
+make lint
+
+# Run the pytest suite
+make test
+
+# Format code
+make format
+
+# Check formatting without making changes
+make check
+
+# Clean up cache files
+make clean
+```
 
 This integration is based on the Delta ERV Modbus specification document and follows Home Assistant integration best practices.
 
