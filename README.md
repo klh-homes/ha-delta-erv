@@ -27,6 +27,7 @@ This fork diverges from [aitjcize/ha-delta-erv](https://github.com/aitjcize/ha-d
 ## Supported Models
 
 Based on the Delta ERV specification document, this integration supports:
+
 - VEB250-N, VEB150, VEB250, VEB350 models (full feature support)
 - VEB500, VEB800, VEB1000 models (limited register support)
 
@@ -35,6 +36,7 @@ Based on the Delta ERV specification document, this integration supports:
 ## Installation
 
 ### Hardware
+
 The delta ERV's stock control panel consists of an AC (220V) to DC (5V) transformer, and a screen module with built-in control board. Since we want to control the ERV ourselves, the control board is no longer needed. We can purchase any off-the-self RS485 to wifi converter which can be powered by 5V DC. For example, this [EP-W100 RS485 to Wifi converter](https://e.tb.cn/h.79rbgwYYMP1WPCZ?tk=7FMdUWSXanM) by 华允物联. Connect the pinout from the stock transformer's GND, 5VDC, RS485 A/B pins to the RS845 to wifi converter as shown in the image below.
 
 <p align="center">
@@ -48,16 +50,16 @@ I've also designed a 3D printable case which matches the original panel design, 
 
 #### HACS (recommended)
 
-1. In HACS, open the three-dot menu → *Custom repositories*, paste this repo URL, set category to *Integration*, and add it.
+1. In HACS, open the three-dot menu → _Custom repositories_, paste this repo URL, set category to _Integration_, and add it.
 2. Install "Delta ERV" from HACS.
 3. Restart Home Assistant.
-4. *Settings → Devices & Services → Add Integration → Delta ERV*.
+4. _Settings → Devices & Services → Add Integration → Delta ERV_.
 
 #### Manual
 
 1. Copy the `custom_components/delta_erv` directory to your Home Assistant `/config/custom_components/` directory.
 2. Restart Home Assistant.
-3. *Settings → Devices & Services → Add Integration → Delta ERV*.
+3. _Settings → Devices & Services → Add Integration → Delta ERV_.
 
 ## Configuration
 
@@ -77,12 +79,14 @@ The integration can be configured through the Home Assistant UI. You'll need to 
 ## Entities
 
 ### Fan Entity
+
 - **ERV Fan**: Controls the main ERV fan with three speed levels
   - Low (風量 1)
-  - Medium (風量 2) 
+  - Medium (風量 2)
   - High (風量 3)
 
 ### Sensor Entities
+
 - **Outdoor Temperature**: External air temperature
 - **Indoor Return Temperature**: Return air temperature
 - **Supply Fan Speed**: Supply fan RPM
@@ -94,16 +98,16 @@ The integration can be configured through the Home Assistant UI. You'll need to 
 
 The integration uses the following Modbus registers based on the Delta ERV specification:
 
-| Register | Name | Function |
-|----------|------|----------|
-| 0x05 | 開關機 | Power On/Off |
-| 0x06 | 風量設定 | Fan Speed Setting |
-| 0x10 | 異常狀態 | Abnormal Status |
-| 0x11 | 外氣溫度 | Outdoor Temperature |
-| 0x12 | 室內回風溫度 | Indoor Return Temperature |
-| 0x0D | 送風機轉速 | Supply Fan Speed |
-| 0x0E | 排風機轉速 | Exhaust Fan Speed |
-| 0x13 | 系統狀態 | System Status |
+| Register | Name         | Function                  |
+| -------- | ------------ | ------------------------- |
+| 0x05     | 開關機       | Power On/Off              |
+| 0x06     | 風量設定     | Fan Speed Setting         |
+| 0x10     | 異常狀態     | Abnormal Status           |
+| 0x11     | 外氣溫度     | Outdoor Temperature       |
+| 0x12     | 室內回風溫度 | Indoor Return Temperature |
+| 0x0D     | 送風機轉速   | Supply Fan Speed          |
+| 0x0E     | 排風機轉速   | Exhaust Fan Speed         |
+| 0x13     | 系統狀態     | System Status             |
 
 ## Hardware Setup
 
@@ -115,17 +119,20 @@ The integration uses the following Modbus registers based on the Delta ERV speci
 ## Troubleshooting
 
 ### Connection Issues
+
 - Verify RS485 wiring (A/B or +/- connections)
 - Check baud rate and communication parameters
 - Ensure the slave ID matches between the ERV and configuration
 - Test with a Modbus testing tool first
 
 ### Missing Entities
+
 - Some registers may not be available on all ERV models
 - Check the specification document for your specific model
 - Enable debug logging to see communication details
 
 ### Debug Logging
+
 Add this to your `configuration.yaml` to enable debug logging:
 
 ```yaml
