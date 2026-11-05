@@ -3,6 +3,7 @@ import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.delta_erv.const import (
+    REG_FAN_SPEED,
     REG_OUTDOOR_TEMP,
     REG_POWER,
     REG_SYSTEM_STATUS,
@@ -62,3 +63,7 @@ async def test_coordinator_tolerates_missing_optional_registers(fake_client):
     assert REG_POWER in data
     assert REG_OUTDOOR_TEMP in data
     assert REG_SYSTEM_STATUS not in data
+
+
+def test_coordinator_does_not_poll_write_only_fan_speed_register():
+    assert REG_FAN_SPEED not in REGISTERS_TO_POLL

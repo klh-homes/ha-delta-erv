@@ -17,7 +17,6 @@ from .const import (
     REG_BYPASS_FUNCTION,
     REG_EXHAUST_AIR_1_PCT,
     REG_EXHAUST_FAN_SPEED,
-    REG_FAN_SPEED,
     REG_INDOOR_RETURN_TEMP,
     REG_INTERNAL_CIRCULATION,
     REG_OUTDOOR_TEMP,
@@ -34,7 +33,6 @@ _LOGGER = logging.getLogger(__name__)
 # the coordinator — previously each entity issued its own read loop.
 REGISTERS_TO_POLL: tuple[int, ...] = (
     REG_POWER,
-    REG_FAN_SPEED,
     REG_SUPPLY_AIR_1_PCT,
     REG_EXHAUST_AIR_1_PCT,
     REG_SUPPLY_FAN_SPEED,

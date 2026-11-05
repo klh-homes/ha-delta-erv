@@ -20,7 +20,11 @@ from custom_components.delta_erv.const import (
     STATUS_INDOOR_TEMP_ERROR,
     SUPPLY_MAX_REGISTER_PCT,
 )
-from custom_components.delta_erv.fan import DeltaERVFan
+from custom_components.delta_erv.fan import (
+    DeltaERVFan,
+    calculate_fan_percentages,
+    calculate_user_percentage,
+)
 from custom_components.delta_erv.select import (
     DeltaERVBypassSelect,
     DeltaERVInternalCirculationSelect,
@@ -83,6 +87,17 @@ async def test_fan_set_percentage_writes_supply_exhaust_and_fan_speed(fake_clien
     written_regs = {addr for addr, _ in fake_client.writes}
     assert REG_SUPPLY_AIR_1_PCT in written_regs
     assert REG_EXHAUST_AIR_1_PCT in written_regs
+
+
+def test_fan_exposes_and_round_trips_five_percent_steps():
+    fan = DeltaERVFan(_fake_coordinator({REG_POWER: POWER_ON}), "erv")
+    assert fan.speed_count == 20
+
+    fifty = calculate_fan_percentages(50)
+    fifty_five = calculate_fan_percentages(55)
+
+    assert fifty_five != fifty
+    assert calculate_user_percentage(*fifty_five) == 55
 
 
 # Sensors ------------------------------------------------------------------
