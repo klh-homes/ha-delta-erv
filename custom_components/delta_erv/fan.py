@@ -37,12 +37,12 @@ def calculate_fan_percentages(user_percentage: int) -> tuple[int, int]:
     - 1% register = min RPM (400 / 380)
     - 48% / 62% register = max RPM (1840 / 2300)
 
-    User 0-100% is quantized to 10% steps for consistency with speed_count.
+    User 0-100% is quantized to 5% steps for consistency with speed_count.
     """
     if user_percentage == 0:
         return 0, 0
 
-    quantized_pct = round(user_percentage / 10) * 10
+    quantized_pct = round(user_percentage / 5) * 5
     quantized_pct = max(0, min(100, quantized_pct))
 
     exhaust_pct = int(
@@ -84,7 +84,7 @@ def calculate_user_percentage(supply_pct: int, exhaust_pct: int) -> int:
         / (EXHAUST_MAX_REGISTER_PCT - EXHAUST_MIN_REGISTER_PCT)
         * 90
     )
-    quantized = round(user_pct / 10) * 10
+    quantized = round(user_pct / 5) * 5
     return max(0, min(100, quantized))
 
 
@@ -111,7 +111,7 @@ class DeltaERVFan(CoordinatorEntity[DeltaERVDataCoordinator], FanEntity):
         | FanEntityFeature.TURN_ON
         | FanEntityFeature.TURN_OFF
     )
-    _attr_speed_count = 10  # 10% steps
+    _attr_speed_count = 20  # 5% steps
 
     def __init__(self, coordinator: DeltaERVDataCoordinator, name: str) -> None:
         super().__init__(coordinator)

@@ -6,7 +6,7 @@ This is a custom component for Home Assistant that integrates Delta ERV (Energy 
 
 ## Features
 
-- Control ERV fan speed (Low/Medium/High)
+- Control ERV fan speed in 5% increments
 - Turn ERV system on/off
 - Monitor outdoor and indoor return temperatures
 - Monitor supply and exhaust fan speeds
@@ -80,10 +80,7 @@ The integration can be configured through the Home Assistant UI. You'll need to 
 
 ### Fan Entity
 
-- **ERV Fan**: Controls the main ERV fan with three speed levels
-  - Low (風量 1)
-  - Medium (風量 2)
-  - High (風量 3)
+- **ERV Fan**: Controls the main ERV fan from 5% to 100% in 5% increments
 
 ### Sensor Entities
 
